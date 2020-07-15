@@ -3,3 +3,5 @@ logs
 vendor
 html
 proxy
+cookies
+test.php
