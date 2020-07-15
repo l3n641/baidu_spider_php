@@ -174,6 +174,7 @@ class BaiduSearchLog
 class BaiduRequestHeader
 {
 
+    static $cookie_save_path = './cookies/';
 
     public static function get_handler()
     {
@@ -184,7 +185,15 @@ class BaiduRequestHeader
                 $request = $request->withHeader('User-Agent', static::get_user_agent())
                     ->withHeader('Accept', $accept)
                     ->withHeader("Accept-Language", "zh-CN,zh;q=0.9")->withHeader("Cookie", static::get_baidu_cookies());
+                $cookie_file_path = static::$cookie_save_path . "cookie.txt";
+                if (file_exists($cookie_file_path)) {
+                    $cookies = json_decode(file_get_contents($cookie_file_path), true);
+                    if ($cookies) {
+                        $cookie_jar = \GuzzleHttp\Cookie\CookieJar::fromArray($cookies, '.baidu.com');
+                        $options['cookies'] = $cookie_jar;
+                    }
 
+                }
 
                 return $handler($request, $options);
             };
@@ -212,7 +221,74 @@ class BaiduRequestHeader
     public static function get_baidu_cookies()
     {
         $baidu_id = $uniqid = md5(uniqid());
+        return "PSTM=1593089253; BIDUPSID=EABF07A76F880FAECFA1E25FFA854587; MSA_WH=1680_939; H_WISE_SIDS=148077_150112_150657_147345_150075_147090_150087_148194_148867_147685_148713_147279_150037_150165_149532_150154_148754_147888_148238_148524_127969_150576_149907_146550_150562_149719_150345_146732_138425_149557_149761_131423_114552_147528_147913_107318_146848_150629_148185_147717_149251_150953_150781_147989_144966_149280_148660_150340_148425_148751_147547_146054_148869_150377_110085; BD_UPN=123253; BDORZ=B490B5EBF6F3CD402E515D22BCDA1598; BAIDUID=9761D4561ED15171D37051713B2CF1E5:SL=0:NR=10:FG=1; BDUSS=hkLWQ5R054NjNTU08tZndsZ3BEc08yNFFKSi1qRkRxZnA4Q3hsWWZNbi1JRFpmSVFBQUFBJCQAAAAAAAAAAAEAAADyKCQh17fRsMDow~e1xMrvueIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP6TDl~-kw5fcn; delPer=0; BD_CK_SAM=1; BD_HOME=1; BDRCVFR[feWj1Vr5u3D]=I67x6TjHwwYf0; H_PS_PSSID=32216_1458_31671_32139_32046_32230_32145_32258_26350_31640; H_PS_645EC=f9b5%2BDzUK0W67QNUj5L77xvqEs5fpkzTJPvZAQgIVyc7GvjDr5RXZTZhS08eRUN1ahwC; sug=3; sugstore=1; ORIGIN=0; bdime=0; PSINO=7; BDSVRTM=18; WWW_ST=1594792980204";
         return sprintf("BAIDUID=%s:FG=1; BIDUPSID=%s; PSTM=%s", $baidu_id, $baidu_id, time());
+    }
+
+
+    /**判断这个页面是不是为百度的人机验证页面,如果是返回true
+     * @param $html
+     */
+    public static function is_captcha_page($html)
+    {
+
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
+        $xPath = new DOMXPath($dom);
+        $elements = $xPath->query('/html/head/title/text()');
+        if (count($elements) && $elements[0]->nodeValue == "百度安全验证") {
+            return true;
+        }
+
+        $elements = $xPath->query('/html/body/a[starts-with(@href,"https://wappass.baidu.com/static/captcha/tuxing.html")]');
+        if (count($elements)) {
+            return true;
+        }
+        return false;
+
+
+    }
+
+
+    public static function get_save_cookie_handler()
+    {
+        return function (callable $handler) {
+            return function (\Psr\Http\Message\RequestInterface $request, array $options) use ($handler) {
+                $promise = $handler($request, $options);
+                return $promise->then(
+                    function (Psr\Http\Message\ResponseInterface $response) use ($handler) {
+                        if (!file_exists(static::$cookie_save_path)) {
+                            mkdir(static::$cookie_save_path, 0777, true);
+                        }
+
+
+                        $body = $response->getBody();
+                        $html = $body->getContents();
+                        $status = static::is_captcha_page($html);
+
+                        if ($response->hasHeader("Set-Cookie") && !$status) {
+                            $cookies = static::parse_cookies_to_array($response->getHeader("Set-Cookie"));
+                            file_put_contents(static::$cookie_save_path . "cookie.txt", json_encode($cookies));
+                        } else {
+                            unlink(static::$cookie_save_path . "cookie.txt");
+                        }
+                        $body->rewind();
+                        return $response;
+                    }
+                );
+            };
+        };
+    }
+
+    protected static function parse_cookies_to_array($cookies)
+    {
+        $cookie_list = [];
+        foreach ($cookies as $cookie) {
+            $datas = explode(";", $cookie);
+            list($key, $value) = explode('=', $datas[0]);
+            $cookie_list[] = [$key => $value];
+        }
+        return $cookie_list;
     }
 
 
